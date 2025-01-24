@@ -1,10 +1,9 @@
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackContext
 import gspread
-from oauth2client.service_account 
-import ServiceAccountCredentialsimport os
+from oauth2client.service_account import ServiceAccountCredentials
+import os
 import json
-
 
 # Conectar con Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -14,8 +13,8 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(credentials_
 client = gspread.authorize(creds)
 
 # Acceder a las hojas de cálculo
-sheet_bd = client.open("Nombre de la hoja de cálculo").worksheet("BD")
-sheet_notas = client.open("Nombre de la hoja de cálculo").worksheet("Notas")
+sheet_bd = client.open("BD de horarios").worksheet("BD")
+sheet_notas = client.open("BD de horarios").worksheet("Notas")
 
 def get_service_info(service_code, season=None, day=None):
     """Obtiene los datos de un servicio específico filtrado por temporada y días."""
@@ -75,8 +74,8 @@ def servicio_command(update: Update, context: CallbackContext):
 
 # Configuración del bot
 def main():
-    # Coloca tu token aquí
-    TOKEN = "TU_TOKEN_DEL_BOT"
+    # Leer el token desde la variable de entorno
+    TOKEN = os.getenv("TOKEN")
 
     updater = Updater(TOKEN)
     dp = updater.dispatcher
@@ -89,3 +88,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
