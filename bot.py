@@ -4,6 +4,11 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import os
 import json
+def start_command(update: Update, context: CallbackContext):
+    update.message.reply_text("¡El bot está funcionando correctamente!")
+
+dp.add_handler(CommandHandler("start", start_command))
+
 
 # Conectar con Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
