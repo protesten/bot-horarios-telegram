@@ -10,19 +10,38 @@ def start_command(update: Update, context: CallbackContext):
     update.message.reply_text("¡El bot está funcionando correctamente!")
 
 # Conectar con Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials_json = os.getenv('CREDENTIALS_JSON')
-creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(credentials_json), scope)
-client = gspread.authorize(creds)
+def connect_to_sheets():
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        credentials_json = os.getenv('CREDENTIALS_JSON')
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(credentials_json), scope)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        print(f"Error conectando con Google Sheets: {e}")
+        return None
 
-# Acceder a las hojas de cálculo
-sheet_bd = client.open("BD de horarios").worksheet("BD")
-sheet_notas = client.open("BD de horarios").worksheet("Notas")
+client = connect_to_sheets()
+
+if client:
+    try:
+        sheet_bd = client.open("BD de horarios").worksheet("BD")
+        sheet_notas = client.open("BD de horarios").worksheet("Notas")
+    except Exception as e:
+        print(f"Error accediendo a las hojas de cálculo: {e}")
+else:
+    sheet_bd, sheet_notas = None, None
 
 def get_service_info(service_code, season=None, day=None):
     """Obtiene los datos de un servicio específico filtrado por temporada y días."""
-    data_bd = sheet_bd.get_all_records()
-    data_notas = sheet_notas.get_all_records()
+    if not sheet_bd or not sheet_notas:
+        return "Error: No se pudo acceder a las hojas de cálculo."
+
+    try:
+        data_bd = sheet_bd.get_all_records()
+        data_notas = sheet_notas.get_all_records()
+    except Exception as e:
+        return f"Error leyendo datos de las hojas: {e}"
 
     # Filtrar por código de servicio
     filtered_data = [row for row in data_bd if row['Servicio'] == service_code]
