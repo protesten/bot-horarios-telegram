@@ -1,11 +1,16 @@
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackContext
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from oauth2client.service_account 
+import ServiceAccountCredentialsimport os
+import json
+
 
 # Conectar con Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+# Leer las credenciales desde la variable de entorno
+credentials_json = os.getenv('CREDENTIALS_JSON')
+creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(credentials_json), scope)
 client = gspread.authorize(creds)
 
 # Acceder a las hojas de cálculo
