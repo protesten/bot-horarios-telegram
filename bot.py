@@ -4,15 +4,13 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import os
 import json
+
+# Comando para verificar el funcionamiento del bot
 def start_command(update: Update, context: CallbackContext):
     update.message.reply_text("¡El bot está funcionando correctamente!")
 
-dp.add_handler(CommandHandler("start", start_command))
-
-
 # Conectar con Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-# Leer las credenciales desde la variable de entorno
 credentials_json = os.getenv('CREDENTIALS_JSON')
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(credentials_json), scope)
 client = gspread.authorize(creds)
@@ -56,7 +54,7 @@ def get_service_info(service_code, season=None, day=None):
 
     return response
 
-# Comando para Telegram
+# Comando para buscar servicios
 def servicio_command(update: Update, context: CallbackContext):
     try:
         service_code = context.args[0].upper()
@@ -85,6 +83,8 @@ def main():
     updater = Updater(TOKEN)
     dp = updater.dispatcher
 
+    # Registrar comandos
+    dp.add_handler(CommandHandler("start", start_command))
     dp.add_handler(CommandHandler("servicio", servicio_command))
 
     # Iniciar el bot
@@ -93,4 +93,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
