@@ -2,6 +2,12 @@ import asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import gspread
+from google.oauth2.service_account import Credentials
+
+# Cargar las credenciales desde la variable de entorno
+credentials_info = json.loads(os.getenv("CREDENTIALS_JSON"))
+credentials = Credentials.from_service_account_info(credentials_info)
+gc = gspread.authorize(credentials)
 
 # Configuración del bot
 TOKEN = "TU_TOKEN_DE_TELEGRAM"
