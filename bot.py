@@ -1,138 +1,160 @@
-import asyncio  # Para manejar programación asincrónica
-import os  # Para acceder a las variables de entorno
-import json  # Para procesar datos en formato JSON
-from telegram import Update, ReplyKeyboardMarkup  # Herramientas de la API de Telegram
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes  # Manejadores de eventos para Telegram
-import gspread  # Para interactuar con Google Sheets
-from google.oauth2.service_account import Credentials  # Para autenticar con Google Sheets usando una cuenta de servicio
+import os
+import json
+import asyncio
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import gspread
+from google.oauth2.service_account import Credentials
 
-# **Cargar las credenciales desde la variable de entorno**
-# El archivo de credenciales se almacena como una variable de entorno en Render
-credentials_info = json.loads(os.getenv("CREDENTIALS_JSON"))  # Carga las credenciales en formato JSON desde la variable de entorno
-credentials = Credentials.from_service_account_info(credentials_info)  # Crea un objeto de credenciales para Google Sheets
-gc = gspread.authorize(credentials)  # Autoriza gspread con las credenciales
+# ============================
+# Configuración de Credenciales
+# ============================
+# Cargar las credenciales desde la variable de entorno 'CREDENTIALS_JSON'
+# Estas credenciales permiten la conexión a Google Sheets mediante gspread.
+credentials_info = json.loads(os.getenv("CREDENTIALS_JSON"))
 
-# **Configuración del bot**
-TOKEN = os.getenv("TOKEN")  # Obtiene el token del bot de Telegram desde la variable de entorno
-GC_SHEET = "BD de horarios"  # Nombre de la hoja de cálculo en Google Sheets
+# Definir los alcances necesarios para Google Sheets
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# **Conexión a Google Sheets**
-sheet = gc.open(GC_SHEET)  # Abre la hoja de cálculo de Google Sheets por su nombre
-bd_hoja = sheet.worksheet("BD")  # Accede a la hoja "BD" dentro del archivo de Google Sheets
-notas_generales_hoja = sheet.worksheet("Notas Generales")  # Accede a la hoja "Notas Generales"
-notas_hoja = sheet.worksheet("Notas")  # Accede a la hoja "Notas"
+# Crear el objeto de credenciales usando las credenciales cargadas y los scopes
+credentials = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 
-# **Comando /start**
+# Autorizar gspread con las credenciales configuradas
+gc = gspread.authorize(credentials)
+
+# ============================
+# Configuración de Google Sheets
+# ============================
+# Nombre de la hoja de cálculo
+GC_SHEET = "BD de horarios"
+
+# Conectar con la hoja de cálculo en Google Sheets
+try:
+    sheet = gc.open(GC_SHEET)
+    bd_hoja = sheet.worksheet("BD")  # Hoja con los datos principales
+    notas_generales_hoja = sheet.worksheet("Notas Generales")  # Hoja de notas generales
+    notas_hoja = sheet.worksheet("Notas")  # Hoja de notas específicas
+except Exception as e:
+    print(f"Error al conectar con Google Sheets: {e}")
+    raise
+
+# ============================
+# Configuración del Bot de Telegram
+# ============================
+# Cargar el token del bot desde una variable de entorno
+TOKEN = os.getenv("TOKEN")
+
+# ============================
+# Funciones Auxiliares
+# ============================
+
+def obtener_lineas():
+    """Obtiene una lista única de todas las líneas disponibles en la hoja 'BD'."""
+    lineas = bd_hoja.col_values(1)[1:]  # Obtener valores de la primera columna, omitiendo el encabezado
+    return sorted(set(lineas))
+
+def obtener_servicios(linea):
+    """Obtiene una lista única de los servicios disponibles para una línea específica."""
+    servicios = [row[1] for row in bd_hoja.get_all_values() if row[0] == linea]
+    return sorted(set(servicios))
+
+def filtrar_datos(linea, servicio, dias, temporada):
+    """Filtra los datos en la hoja 'BD' según los parámetros proporcionados."""
+    datos = bd_hoja.get_all_records()
+    filtrados = [d for d in datos if (
+        (d["Servicio"] == linea or not linea) and
+        (str(d["Código Servicio"]) == servicio or not servicio) and
+        (d["Días"] == dias or not dias) and
+        (d["Temporada"] == temporada or not temporada)
+    )]
+    return filtrados
+
+def obtener_notas_generales(codigo):
+    """Obtiene la descripción de una nota general según su código."""
+    notas = notas_generales_hoja.get_all_records()
+    return next((n["Descripción"] for n in notas if n["Código General"] == codigo), "")
+
+def obtener_notas(codigo):
+    """Obtiene la descripción de una nota específica según su código."""
+    notas = notas_hoja.get_all_records()
+    return next((n["Descripción"] for n in notas if n["Código"] == codigo), "")
+
+# ============================
+# Handlers de Telegram
+# ============================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Crear un teclado con opciones para el usuario
+    """Se ejecuta cuando el usuario inicia el bot con /start."""
     teclado = [["Consultar horario"]]
     reply_markup = ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
-    # Enviar un mensaje de bienvenida con el teclado incluido
     await update.message.reply_text(
         "¡Bienvenido al bot de horarios! Selecciona una opción:",
         reply_markup=reply_markup
     )
 
-# **Obtener las líneas disponibles**
-def obtener_lineas():
-    lineas = bd_hoja.col_values(1)[1:]  # Obtiene todos los valores de la primera columna (excepto el encabezado)
-    return sorted(set(lineas))  # Devuelve las líneas únicas en orden
+def obtener_menu_lineas():
+    """Genera un teclado con las líneas disponibles."""
+    lineas = obtener_lineas()
+    teclado = [[linea] for linea in lineas]
+    return ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
 
-# **Obtener los servicios disponibles para una línea específica**
-def obtener_servicios(linea):
-    servicios = [row[1] for row in bd_hoja.get_all_values() if row[0] == linea]  # Busca los servicios de la línea
-    return sorted(set(servicios))  # Devuelve los servicios únicos en orden
-
-# **Filtrar los datos según los criterios del usuario**
-def filtrar_datos(linea, servicio, dias, temporada):
-    datos = bd_hoja.get_all_records()  # Obtiene todos los registros de la hoja en formato de diccionario
-    # Filtra los registros según los parámetros dados
-    filtrados = [d for d in datos if (
-        (str(d["Servicio"]) == linea or not linea) and  # Si no se especifica línea, toma todas
-        (str(d["Código Servicio"]) == servicio or not servicio) and  # Si no se especifica servicio, toma todos
-        (d["Días"] == dias or not dias) and  # Si no se especifican días, toma todos
-        (d["Temporada"] == temporada or not temporada)  # Si no se especifica temporada, toma todas
-    )]
-    return filtrados  # Devuelve los registros filtrados
-
-# **Obtener notas generales según su código**
-def obtener_notas_generales(codigo):
-    notas = notas_generales_hoja.get_all_records()  # Obtiene todas las notas generales
-    # Devuelve la descripción correspondiente al código
-    return next((n["Descripción"] for n in notas if n["Código General"] == codigo), "")
-
-# **Obtener notas específicas según su código**
-def obtener_notas(codigo):
-    notas = notas_hoja.get_all_records()  # Obtiene todas las notas específicas
-    # Devuelve la descripción correspondiente al código
-    return next((n["Descripción"] for n in notas if n["Código"] == codigo), "")
-
-# **Manejar la consulta de horarios**
 async def consultar_horario(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lineas = obtener_lineas()  # Obtiene todas las líneas disponibles
-    teclado = [[linea] for linea in lineas]  # Crea un teclado con las líneas
-    reply_markup = ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
-    # Solicita al usuario que seleccione una línea
+    """Pregunta al usuario qué línea desea consultar."""
+    reply_markup = obtener_menu_lineas()
     await update.message.reply_text(
         "¿Qué línea deseas consultar?",
         reply_markup=reply_markup
     )
     return "ESPERANDO_LINEA"
 
-# **Manejar la selección de una línea**
 async def manejar_linea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data["linea"] = update.message.text  # Guarda la línea seleccionada en los datos del usuario
-    servicios = obtener_servicios(context.user_data["linea"])  # Obtiene los servicios de esa línea
-    teclado = [[servicio] for servicio in servicios]  # Crea un teclado con los servicios
+    """Maneja la selección de línea por parte del usuario."""
+    context.user_data["linea"] = update.message.text
+    servicios = obtener_servicios(context.user_data["linea"])
+    teclado = [[servicio] for servicio in servicios]
     reply_markup = ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
-    # Solicita al usuario que seleccione un servicio
     await update.message.reply_text(
         "Selecciona el servicio:",
         reply_markup=reply_markup
     )
     return "ESPERANDO_SERVICIO"
 
-# **Manejar la selección de un servicio**
 async def manejar_servicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data["servicio"] = update.message.text  # Guarda el servicio seleccionado
+    """Maneja la selección de servicio por parte del usuario."""
+    context.user_data["servicio"] = update.message.text
     dias_teclado = [["TD - Todos los días"], ["SDF - Sábados"], ["LAB - Laborables"]]
     reply_markup = ReplyKeyboardMarkup(dias_teclado, resize_keyboard=True, one_time_keyboard=True)
-    # Solicita al usuario que seleccione los días
     await update.message.reply_text(
         "Selecciona los días:",
         reply_markup=reply_markup
     )
     return "ESPERANDO_DIAS"
 
-# **Manejar la selección de días**
 async def manejar_dias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data["dias"] = update.message.text  # Guarda los días seleccionados
+    """Maneja la selección de días por parte del usuario."""
+    context.user_data["dias"] = update.message.text
     temporada_teclado = [["IV - Todo el año"], ["V - Verano"], ["I - Invierno"]]
     reply_markup = ReplyKeyboardMarkup(temporada_teclado, resize_keyboard=True, one_time_keyboard=True)
-    # Solicita al usuario que seleccione la temporada
     await update.message.reply_text(
         "Selecciona la temporada:",
         reply_markup=reply_markup
     )
     return "ESPERANDO_TEMPORADA"
 
-# **Manejar la selección de temporada y mostrar resultados**
 async def manejar_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data["temporada"] = update.message.text  # Guarda la temporada seleccionada
+    """Maneja la selección de temporada por parte del usuario y muestra los resultados."""
+    context.user_data["temporada"] = update.message.text
 
-    # Recupera los criterios del usuario
     linea = context.user_data.get("linea", "")
     servicio = context.user_data.get("servicio", "")
     dias = context.user_data.get("dias", "")
     temporada = context.user_data.get("temporada", "")
 
-    # Filtra los datos según los criterios
     resultados = filtrar_datos(linea, servicio, dias, temporada)
     if not resultados:
         await update.message.reply_text("No se encontraron horarios para tu búsqueda.")
         return
 
-    # Construye la respuesta para el usuario
     respuesta = f"Línea: {linea}\nServicio: {servicio}\nDías: {dias}\nTemporada: {temporada}\n-------------\n"
     for r in resultados:
         respuesta += f"* {r['Hora']} - {r['Lugar']}\n"
@@ -151,23 +173,26 @@ async def manejar_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.message.reply_text(respuesta)
     return "FIN"
 
-# **Manejar mensajes desconocidos**
 async def mensaje_desconocido(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Responde a cualquier mensaje desconocido."""
     await update.message.reply_text("No entiendo tu mensaje. Por favor, usa los comandos disponibles.")
 
-# **Función principal**
+# ============================
+# Main: Configuración del Bot
+# ============================
 async def main():
-    # Crea una aplicación para el bot con el token
+    """Función principal que configura el bot y sus handlers."""
     application = Application.builder().token(TOKEN).build()
 
-    # Agrega manejadores para los comandos y mensajes
+    # Agregar handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Text(["Consultar horario"]), consultar_horario))
     application.add_handler(MessageHandler(filters.ALL, mensaje_desconocido))
 
-    # Inicia el bot
-    await application.run_polling()
+    # Iniciar el bot
+    await application.start()
+    await application.updater.start_polling()
+    await application.idle()
 
-# **Punto de entrada**
 if __name__ == "__main__":
     asyncio.run(main())
