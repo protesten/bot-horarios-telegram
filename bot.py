@@ -1,120 +1,138 @@
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import asyncio
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import os
-import json
 
-# Conectar con Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials_json = os.getenv('CREDENTIALS_JSON')
-creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(credentials_json), scope)
-client = gspread.authorize(creds)
+# Configuración del bot
+TOKEN = "TU_TOKEN_DE_TELEGRAM"
+GC_SHEET = "BD de horarios"  # Nombre de tu hoja de Google Sheets
 
-# Acceder a las hojas de cálculo
-sheet_bd = client.open("BD de horarios").worksheet("BD")
-sheet_notas_generales = client.open("BD de horarios").worksheet("Notas Generales")
-sheet_notas = client.open("BD de horarios").worksheet("Notas")
+# Conexión a Google Sheets
+gc = gspread.service_account(filename="credenciales.json")
+sheet = gc.open(GC_SHEET)
+bd_hoja = sheet.worksheet("BD")
+notas_generales_hoja = sheet.worksheet("Notas Generales")
+notas_hoja = sheet.worksheet("Notas")
 
-# Funciones auxiliares para manejar datos de las hojas de cálculo
-def get_lines():
-    data_bd = sheet_bd.get_all_records()
-    lines = sorted(set(row['Recorrido'] for row in data_bd))
-    return lines
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    teclado = [["Consultar horario"]]
+    reply_markup = ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "¡Bienvenido al bot de horarios! Selecciona una opción:",
+        reply_markup=reply_markup
+    )
 
-def get_services_by_line(line):
-    data_bd = sheet_bd.get_all_records()
-    services = sorted(set(row['Código Servicio'] for row in data_bd if row['Recorrido'] == line))
-    return services
+def obtener_lineas():
+    lineas = bd_hoja.col_values(1)[1:]
+    return sorted(set(lineas))
 
-def get_schedule(line, service, day, season):
-    data_bd = sheet_bd.get_all_records()
-    data_notas_generales = sheet_notas_generales.get_all_records()
-    data_notas = sheet_notas.get_all_records()
+def obtener_servicios(linea):
+    servicios = [row[1] for row in bd_hoja.get_all_values() if row[0] == linea]
+    return sorted(set(servicios))
 
-    # Filtrar horarios por línea, servicio, día y temporada
-    filtered = [row for row in data_bd if row['Recorrido'] == line and row['Código Servicio'] == service]
+def filtrar_datos(linea, servicio, dias, temporada):
+    datos = bd_hoja.get_all_records()
+    filtrados = [d for d in datos if (
+        (d["Servicio"] == linea or not linea) and
+        (str(d["Código Servicio"]) == servicio or not servicio) and
+        (d["Días"] == dias or not dias) and
+        (d["Temporada"] == temporada or not temporada)
+    )]
+    return filtrados
 
-    if day:
-        filtered = [row for row in filtered if row['Días'] == day or row['Días'] == "TD"]
+def obtener_notas_generales(codigo):
+    notas = notas_generales_hoja.get_all_records()
+    return next((n["Descripción"] for n in notas if n["Código General"] == codigo), "")
 
-    if season:
-        filtered = [row for row in filtered if row['Temporada'] == season or row['Temporada'] == "IV"]
+def obtener_notas(codigo):
+    notas = notas_hoja.get_all_records()
+    return next((n["Descripción"] for n in notas if n["Código"] == codigo), "")
 
-    # Formatear la respuesta
-    response = f"Línea: {line}\nServicio: {service}\nDías: {day or 'TD'}\n-------------\n"
+async def consultar_horario(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    lineas = obtener_lineas()
+    teclado = [[linea] for linea in lineas]
+    reply_markup = ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "¿Qué línea deseas consultar?",
+        reply_markup=reply_markup
+    )
+    return "ESPERANDO_LINEA"
 
-    for row in filtered:
-        response += f"* {row['Hora']} - {row['Lugar']}"
-        if row['Notas']:
-            notas = row['Notas'].split(" - ")
-            for nota in notas:
-                descripcion = next((n['Descripción'] for n in data_notas if n['Código'] == nota), "Descripción no disponible")
-                response += f" - {descripcion}"
-        response += "\n"
+async def manejar_linea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["linea"] = update.message.text
+    servicios = obtener_servicios(context.user_data["linea"])
+    teclado = [[servicio] for servicio in servicios]
+    reply_markup = ReplyKeyboardMarkup(teclado, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "Selecciona el servicio:",
+        reply_markup=reply_markup
+    )
+    return "ESPERANDO_SERVICIO"
 
-    # Agregar notas generales
-    notas_generales = set(row['Notas Generales'] for row in filtered if row['Notas Generales'])
-    response += "----------\n"
-    for nota_general in notas_generales:
-        descripcion = next((ng['Descripción'] for ng in data_notas_generales if ng['Código General'] == nota_general), "Descripción no disponible")
-        response += f"{nota_general} - {descripcion}\n"
+async def manejar_servicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["servicio"] = update.message.text
+    dias_teclado = [["TD - Todos los días"], ["SDF - Sábados"], ["LAB - Laborables"]]
+    reply_markup = ReplyKeyboardMarkup(dias_teclado, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "Selecciona los días:",
+        reply_markup=reply_markup
+    )
+    return "ESPERANDO_DIAS"
 
-    return response or "No se encontraron horarios para los filtros especificados."
+async def manejar_dias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["dias"] = update.message.text
+    temporada_teclado = [["IV - Todo el año"], ["V - Verano"], ["I - Invierno"]]
+    reply_markup = ReplyKeyboardMarkup(temporada_teclado, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "Selecciona la temporada:",
+        reply_markup=reply_markup
+    )
+    return "ESPERANDO_TEMPORADA"
 
-# Manejo de comandos del bot
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(line, callback_data=f"line|{line}")] for line in get_lines()]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Selecciona una línea:", reply_markup=reply_markup)
+async def manejar_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["temporada"] = update.message.text
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    linea = context.user_data.get("linea", "")
+    servicio = context.user_data.get("servicio", "")
+    dias = context.user_data.get("dias", "")
+    temporada = context.user_data.get("temporada", "")
 
-    data = query.data.split('|')
+    resultados = filtrar_datos(linea, servicio, dias, temporada)
+    if not resultados:
+        await update.message.reply_text("No se encontraron horarios para tu búsqueda.")
+        return
 
-    if data[0] == "line":
-        line = data[1]
-        services = get_services_by_line(line)
-        keyboard = [[InlineKeyboardButton(service, callback_data=f"service|{line}|{service}")] for service in services]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"Línea seleccionada: {line}\nSelecciona un servicio:", reply_markup=reply_markup)
+    respuesta = f"Línea: {linea}\nServicio: {servicio}\nDías: {dias}\nTemporada: {temporada}\n-------------\n"
+    for r in resultados:
+        respuesta += f"* {r['Hora']} - {r['Lugar']}\n"
+    
+    nota_general = obtener_notas_generales(resultados[0].get("Notas Generales", ""))
+    if nota_general:
+        respuesta += f"-------\nNota General: {nota_general}\n"
 
-    elif data[0] == "service":
-        line, service = data[1], data[2]
-        keyboard = [
-            [InlineKeyboardButton("TD", callback_data=f"day|{line}|{service}|TD"),
-             InlineKeyboardButton("SDF", callback_data=f"day|{line}|{service}|SDF"),
-             InlineKeyboardButton("LAB", callback_data=f"day|{line}|{service}|LAB")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"Línea: {line}\nServicio: {service}\nSelecciona un tipo de día:", reply_markup=reply_markup)
+    for r in resultados:
+        notas = r.get("Notas", "").split("-")
+        for nota in notas:
+            descripcion_nota = obtener_notas(nota.strip())
+            if descripcion_nota:
+                respuesta += f"Nota: {descripcion_nota}\n"
 
-    elif data[0] == "day":
-        line, service, day = data[1], data[2], data[3]
-        keyboard = [
-            [InlineKeyboardButton("IV", callback_data=f"season|{line}|{service}|{day}|IV"),
-             InlineKeyboardButton("V", callback_data=f"season|{line}|{service}|{day}|V"),
-             InlineKeyboardButton("I", callback_data=f"season|{line}|{service}|{day}|I")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"Línea: {line}\nServicio: {service}\nDías: {day}\nSelecciona una temporada:", reply_markup=reply_markup)
+    await update.message.reply_text(respuesta)
+    return "FIN"
 
-    elif data[0] == "season":
-        line, service, day, season = data[1], data[2], data[3], data[4]
-        schedule = get_schedule(line, service, day, season)
-        await query.edit_message_text(schedule)
+async def mensaje_desconocido(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("No entiendo tu mensaje. Por favor, usa los comandos disponibles.")
 
-# Configuración principal del bot
 async def main():
-    application = Application.builder().token(os.getenv("TOKEN")).build()
+    application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(MessageHandler(filters.Text(["Consultar horario"]), consultar_horario))
+    application.add_handler(MessageHandler(filters.ALL, mensaje_desconocido))
 
-    await application.run_polling()
+    await application.start()
+    await application.updater.start_polling()
+    await application.idle()
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
